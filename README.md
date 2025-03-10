@@ -1,5 +1,6 @@
 # kscan
 - a minimal asynchronous port scanner with a easy to read TUI
+- [ ] add tkinter UI
 ```
 usage: kscan.py [-h] [--output OUTPUT] target
 
