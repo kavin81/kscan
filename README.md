@@ -18,7 +18,7 @@ options:
 
 > made for CN mini-project #2
  
-contributors: Kaushal & Kavin
+contributors: @kaushal1014 & @kavin81
 
 # License
 
