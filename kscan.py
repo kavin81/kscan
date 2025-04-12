@@ -165,7 +165,7 @@ def launch_gui():
 
         try:
             target_ip = resolve_host(target)
-            ports = load_ports("output.csv")
+            ports = load_ports("input.csv")
         except Exception as e:
             messagebox.showerror("Error", str(e))
             return
