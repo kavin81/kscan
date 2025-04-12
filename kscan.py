@@ -5,6 +5,7 @@ import json
 ### Threading ###
 import threading
 import socket
+import ssl
 import concurrent.futures
 
 ### Signal Handling ###
@@ -16,19 +17,15 @@ import argparse
 from time import time
 from typing import Any
 
-
 ### GUI ###
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
 from tkinter.scrolledtext import ScrolledText
 
-
-
 __author__ = "Kavin & Kaushal"
 __license__ = "MIT"
 __version__ = "1.0.1"
-
 
 # Colorize output for better visibility
 def color(text, color) -> str:
@@ -40,7 +37,6 @@ def color(text, color) -> str:
         "cyan": "36",
     }
     return f"\033[{COLOR_MAP[color]}m{text}\033[0m"
-
 
 # Load CSV port data
 def load_ports(csv_file) -> list[Any]:
@@ -56,7 +52,6 @@ def load_ports(csv_file) -> list[Any]:
         print(f"[ERROR] CSV file '{csv_file}' not found!")
         sys.exit(1)
 
-
 # Resolve hostname to IP
 def resolve_host(host) -> str:
     try:
@@ -65,8 +60,7 @@ def resolve_host(host) -> str:
         print(f"[ERROR] Unable to resolve {color(host, 'red')}")
         sys.exit(1)
 
-
-# Scan a single port
+# Scan a single port with SSL detection
 def scan_port(ip, service, protocol, port):
     sock_type = socket.SOCK_STREAM if protocol == "tcp" else socket.SOCK_DGRAM
     proto_type = socket.IPPROTO_TCP if protocol == "tcp" else socket.IPPROTO_UDP
@@ -77,22 +71,37 @@ def scan_port(ip, service, protocol, port):
             if protocol == "tcp":
                 result = s.connect_ex((ip, port))
                 if result == 0:
-                    print(
-                        f"[INFO] Open port discovered {color(port, 'green')}/{color(service, 'cyan')} via {color(protocol, 'blue')} on {color(ip, 'yellow')}"
-                    )
-                    return {"port": port, "service": service, "protocol": protocol}
+                    ssl_supported = False
+                    try:
+                        context = ssl.create_default_context()
+                        with context.wrap_socket(s, server_hostname=ip) as ssl_sock:
+                            ssl_sock.settimeout(1)
+                            ssl_sock.do_handshake()
+                            ssl_supported = True
+                    except (ssl.SSLError, ssl.SSLWantReadError, ssl.SSLWantWriteError, ConnectionResetError, OSError):
+                        pass
+
+                    msg = f"[INFO] Open port discovered {color(port, 'green')}/{color(service, 'cyan')} via {color(protocol, 'blue')} on {color(ip, 'yellow')}"
+                    if ssl_supported:
+                        msg += f" ({color('SSL', 'red')})"
+                    print(msg)
+
+                    return {
+                        "port": port,
+                        "service": service,
+                        "protocol": protocol,
+                        "ssl": ssl_supported,
+                    }
+
             else:
-                # UDP scan
-                s.sendto(b"\x00", (ip, port))  # Send a dummy packet
-                s.recvfrom(1024)  # Wait for a response
+                s.sendto(b"\x00", (ip, port))
+                s.recvfrom(1024)
                 print(
                     f"[INFO] Open port discovered {color(port, 'green')}/{color(service, 'cyan')} via {color(protocol, 'blue')} on {color(ip, 'yellow')}"
-                )  # If no exception is raised, the port is open
-
-                return {"port": port, "service": service, "protocol": protocol}
+                )
+                return {"port": port, "service": service, "protocol": protocol, "ssl": False}
         except (socket.timeout, ConnectionRefusedError, OSError):
             return None
-
 
 # Save scan results to a JSON file
 def save_results(open_ports, output_file, ip, start_time):
@@ -110,17 +119,15 @@ def save_results(open_ports, output_file, ip, start_time):
 
     sys.exit(0)
 
-
 # Scan a target for open ports
 def scan_target(ip, ports, output_file):
     print(f"Scanning {color(ip, 'yellow')} for open ports...")
     start_time = time()
     open_ports = []
 
-    exiting = threading.Event()  # Event to signal threads to exit
+    exiting = threading.Event()
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=100)
 
-    # Handle SIGINT (Ctrl + C)
     def signal_handler(sig, frame):
         print("\n[INFO] Scan interrupted. Saving partial results...")
         exiting.set()
@@ -129,7 +136,6 @@ def scan_target(ip, ports, output_file):
 
     signal.signal(signal.SIGINT, signal_handler)
 
-    # Submit scan tasks
     futures = [
         executor.submit(scan_port, ip, service, protocol, port)
         for service, protocol, port in ports
@@ -147,7 +153,7 @@ def scan_target(ip, ports, output_file):
 
     save_results(open_ports, output_file, ip, start_time)
 
-
+# GUI Launch
 def launch_gui():
     def start_scan():
         target = entry_target.get().strip()
@@ -179,8 +185,9 @@ def launch_gui():
                 result = scan_port(target_ip, service, protocol, port)
                 if result:
                     open_ports.append(result)
+                    ssl_note = " (SSL)" if result.get("ssl") else ""
                     update_text(
-                        f"Open port: {port}/{service} via {protocol} on {target_ip}"
+                        f"Open port: {port}/{service} via {protocol} on {target_ip}{ssl_note}"
                     )
 
             futures = [
@@ -203,7 +210,6 @@ def launch_gui():
 
         threading.Thread(target=gui_scan, daemon=True).start()
 
-    # Tkinter Window
     root = tk.Tk()
     root.title("Concurrent Port Scanner")
 
@@ -226,22 +232,18 @@ def launch_gui():
 
     root.mainloop()
 
-
-
-
-# Main function to handle CLI arguments
+# CLI entry point
 def main():
     parser = argparse.ArgumentParser(description="Concurrent Port Scanner")
     parser.add_argument("target", help="IP or hostname to scan")
     parser.add_argument("--output", help="Save results to a JSON file", type=str, default=None)
     args = parser.parse_args()
 
-    csv_file = "output.csv"  # The generated CSV file with ports
+    csv_file = "output.csv"
     ports = load_ports(csv_file)
     target_ip = resolve_host(args.target)
     scan_target(target_ip, ports, args.output)
 
-
-# Entry point
+# Run GUI if executed directly
 if __name__ == "__main__":
     launch_gui()
